@@ -63,6 +63,60 @@ describe('NodeVM', () => {
 		assert.equal(vm.run("module.exports = console.log.constructor('return (function(){return this})().isHost')()"), undefined);
 	});
 
+	it('promise attack', async () => {
+		const code = `
+		async function fn() {
+			(function stack() {
+				new Error().stack;
+				stack();
+			})();
+		}
+		p = fn();
+		p.constructor = {
+			[Symbol.species]: class FakePromise {
+				constructor(executor) {
+					executor(
+						(x) => x,
+						(err) => {
+							module.exports.e = err.constructor.constructor('return process')().mainModule;
+						}
+					)
+				}
+			}
+		};
+		module.exports.p = p.then();
+		`;
+
+		const ret = vm.run(code);
+		await ret.p;
+		assert.equal(ret.e, undefined);
+	});
+
+	it('inspect attack', async () => {
+		const code = `
+			const customInspectSymbol = Symbol.for('nodejs.util.inspect.custom');
+
+			obj = {
+				[customInspectSymbol]: (depth, opt, inspect) => {
+					module.exports.e = inspect.constructor('return process')().mainModule;
+				},
+				valueOf: undefined,
+				constructor: undefined
+			};
+
+			if(WebAssembly.compileStreaming) { //Only Node v18+
+				module.exports.p = WebAssembly.compileStreaming(obj).catch(()=>{});
+			}
+			else {
+				module.exports.p = Promise.resolve();
+			}
+		`;
+
+		const ret = vm.run(code);
+		await ret.p;
+		assert.equal(ret.e, undefined);
+	});
+
 	it('shebang', () => {
 		assert.doesNotThrow(() => vm.run('#!shebang'));
 	});
